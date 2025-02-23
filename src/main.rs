@@ -2,8 +2,12 @@ use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_ecs_tilemap::prelude::*;
-use std::time::Duration;
 
+mod player;
+mod cursor;
+
+use cursor::{Cursor, CursorData, CursorType};
+use player::{Direction, Graphic, Player, PlayerType, Speed, Target};
 
 fn main() {
     App::new()
@@ -20,157 +24,43 @@ fn main() {
             .set(ImagePlugin::default_nearest()))
         .add_plugins(TilemapPlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, movement)
-        .add_systems(Update, animation)
-        .add_systems(Update, zoom)
+        .add_systems(Update, player_movement)
+        .add_systems(Update, player_animation)
+        .add_systems(Update, cursor_movement)
+        .add_systems(Update, cursor_animation)
+        .add_systems(Update, camera_zoom)
         .run();
 }
-
-#[derive(Component)]
-pub enum Facing {
-    TopLeft,
-    TopRight,
-    BotLeft,
-    BotRight
-}
-
-impl Facing {
-    pub fn from_vector(vector: &Vec3) -> Self {
-        let x = vector.x;
-        let y = vector.y;
-
-        if x > 0. && y > 0. {
-            Self::TopRight
-        }
-        else if x < 0. && y > 0. {
-            Self::TopLeft
-        }
-        else if x < 0. && y < 0. {
-            Self::BotLeft
-        }
-        else if x > 0. && y < 0. {
-            Self::BotRight
-        } 
-        else {
-            Self::BotRight
-        }
-    }
-}
-
-#[derive(Component)]
-pub struct Speed(f32);
-
-#[derive(Component, Debug)]
-pub struct Target(Option<Vec2>);
-
-#[derive(Component)]
-struct AnimationConfig {
-    standing: [usize;4],
-
-    first_sprite_index: usize,
-    last_sprite_index: usize,
-    fps: u8,
-    frame_timer: Timer,
-}
-
-impl AnimationConfig {
-    fn new(first: usize, last: usize, fps: u8) -> Self {
-        Self {
-            standing: [0,1,2,3],
-
-            first_sprite_index: first,
-            last_sprite_index: last,
-            fps,
-            frame_timer: Self::timer_from_fps(fps),
-        }
-    }
-
-    fn timer_from_fps(fps: u8) -> Timer {
-        Timer::new(Duration::from_secs_f32(1.0 / (fps as f32)), TimerMode::Once)
-    }
-}
-
 
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
+    let text_font = TextFont {
+        font_size: 50.0,
+        ..default()
+    };
+    let text_justification = JustifyText::Center;
+
     commands.spawn(Camera2d);
-    
-    let texture: Handle<Image> = asset_server.load("sprites/character2.png");
-    let config = AnimationConfig::new(1, 3, 4);
-    
-    
-    // 255 x 512
-    let layout = TextureAtlasLayout::from_grid(UVec2::new(255,512), 6, 3, None, None);
-    let texture_atlas_layout = texture_atlas_layouts.add(layout);
-
-    commands.spawn((
-        Sprite {
-            image: texture.clone(),
-            texture_atlas: Some(TextureAtlas {
-                layout: texture_atlas_layout.clone(),
-                index: config.first_sprite_index,
-            }),
-            ..default()
-        },
-        Transform::from_xyz(0., 0., 1.),
-        Speed(1.),
-        Target(None),
-        Facing::BotRight,
-        config,
+    commands.spawn(Player::new(
+        "Mike".into(),
+        &asset_server,
+        &mut texture_atlas_layouts
+    )).with_child((
+        Text2d::new("Mike"),
+        text_font.clone(),
+        Transform::from_translation(Vec3::new(0.0, 260.0, 1.0)),
+        TextLayout::new_with_justify(text_justification),
     ));
-
+    commands.spawn(Cursor::new(
+        &asset_server,
+        &mut texture_atlas_layouts
+    ));
 }
 
-
-fn animation(
-    time: Res<Time>, 
-    mut query: Query<(&mut AnimationConfig, &mut Sprite, &mut Target, &mut Facing)>,
-) {
-    for (mut config, mut sprite, target, facing) in &mut query {
-        config.frame_timer.tick(time.delta());
-
-        let (standing, run1, run2) = match *facing {
-            Facing::TopLeft => {
-                let s = config.standing[2];
-                (s, 8, 14)
-            },
-            Facing::TopRight => {
-                let s = config.standing[3];
-                (s, 9, 15)
-            },
-            Facing::BotLeft => {
-                let s = config.standing[0];
-                (s, 6, 12)
-            },
-            Facing::BotRight => {
-                let s = config.standing[1];
-                (s, 7, 13)
-            },
-        };
-
-        if config.frame_timer.just_finished() {
-            if let Some(atlas) = &mut sprite.texture_atlas {
-                if target.0.is_none() {
-                    atlas.index = standing;
-                }
-                else {
-                    if atlas.index == run1 {
-                        atlas.index = run2;
-                    } else {
-                        atlas.index = run1;
-                    }
-                }
-            }
-            config.frame_timer = AnimationConfig::timer_from_fps(config.fps);
-        }
-
-    }
-}
-
-fn zoom(
+fn camera_zoom(
     mut camera: Query<(&mut OrthographicProjection, &Camera2d)>,
     scroll: Res<AccumulatedMouseScroll>,
 ) {
@@ -180,63 +70,137 @@ fn zoom(
     projection.scale = (scale * zoom).clamp(0.1,10.0);
 }
 
-fn movement(
+fn cursor_animation(
     time: Res<Time>, 
-    mut query: Query<(&mut Sprite, &mut Transform, &mut Speed, &mut Target, &mut Facing)>, 
+    mut query: Query<(
+        &mut Sprite,
+        &mut CursorData,
+    ),With<CursorType>>,
+) {
+    for (mut sprite, mut data) in &mut query {
+        data.timer.tick(time.delta());
+        
+        if data.timer.just_finished() {
+            if let Some(atlas) = &mut sprite.texture_atlas {
+                atlas.index = data.next(atlas.index);
+                if atlas.index != 4 {
+                    data.reset();
+                }
+            }
+        }
+    }
+}
+
+fn player_animation(
+    time: Res<Time>, 
+    keys: Res<ButtonInput<KeyCode>>, 
+    mut query: Query<(
+        &mut Graphic,
+        &mut Sprite,
+        &mut Target,
+        &mut Direction
+    ),With<PlayerType>>,
+) {
+    for (mut graphic, mut sprite, target, direction) in &mut query {
+        graphic.timer.tick(time.delta());
+        
+        let animation = if target.0.is_none() {
+            &graphic.idle
+        } else {
+            if keys.pressed(KeyCode::ShiftLeft) {
+                &graphic.running
+            } else {
+                &graphic.walking
+            }
+        };
+
+        if graphic.timer.just_finished() {
+            if let Some(atlas) = &mut sprite.texture_atlas {
+                atlas.index = animation.next(*direction, atlas.index);
+            }
+            graphic.reset();
+        }
+    }
+}
+
+fn cursor_movement(
+    mut query: Query<(
+        &mut Sprite,
+        &mut Transform,
+        &mut CursorData,
+    ),With<CursorType>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera: Query<(&Camera, &GlobalTransform)>,
+) {
+    let (camera, camera_transform) = camera.single();
+
+    for (mut sprite, mut transform, mut data) in &mut query {
+        
+        if buttons.just_pressed(MouseButton::Left) {
+            if let Some(point) = windows
+                .single()
+                .cursor_position()
+                .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor).ok())
+                .map(|ray| Vec3::new(ray.origin.x,ray.origin.y,transform.translation.z))
+            {
+                transform.translation = point;
+                if let Some(atlas) = &mut sprite.texture_atlas {
+                    data.reset();
+                    atlas.index = 0;
+                }
+            }
+        }
+    }
+}
+
+fn player_movement(
+    time: Res<Time>, 
+    mut query: Query<(
+        &mut Transform,
+        &mut Speed,
+        &mut Target,
+        &mut Direction
+    ),With<PlayerType>>,
     keys: Res<ButtonInput<KeyCode>>, 
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform)>,
-    scroll: Res<AccumulatedMouseScroll>,
 ) {
     let (camera, camera_transform) = camera.single();
 
-    for (_, mut transform, speed, mut target, mut facing) in &mut query {
+    for (mut transform, speed, mut target, mut facing) in &mut query {
+        let mut movement = (speed.walking as f32) / 10.0;
         
-
-        if buttons.just_pressed(MouseButton::Left) {
+        if buttons.pressed(MouseButton::Left) {
             (*target).0 = windows
                 .single()
                 .cursor_position()
                 .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor).ok())
-                .map(|ray| ray.origin.truncate());     
+                .map(|ray| ray.origin.truncate())
+                .map(|v| Vec2::new(v.x, v.y + 180.0));
         }
-        else {
-            if let Some(point) = target.0 {
-                let current_position = transform.translation;
-                let target_position = Vec3::new(point.x, point.y, current_position.z);
-                let direction = (target_position - current_position).normalize();
-                *facing = Facing::from_vector(&direction);
-    
-                let distance = current_position.distance(target_position);
-                if distance > 10. {
-                    let translation_amount = 200. * time.delta_secs();
-                    let new_position = current_position + direction * translation_amount;
-                    transform.translation = new_position; // Update the entity's position
-                } else {
-                    (*target).0 = None;
-                }
+
+        if keys.pressed(KeyCode::ShiftLeft) {
+            movement = (speed.running as f32) / 10.0;
+        }
+
+        if let Some(point) = target.0 {
+            let cpos = transform.translation;
+            let tpos = Vec3::new(point.x, point.y, cpos.z);
+            let direction = (tpos - cpos).normalize();
+            let distance = cpos.distance(tpos);
+
+            if distance > 10. {
+                let amount = 1000. * time.delta_secs() * movement;
+                let npos = cpos + direction * amount;
+                transform.translation = npos;
+            } else {
+                (*target).0 = None;
             }
+
+            // update the facing direction of the player
+            *facing = Direction::from(&direction);
         }
-
-
-        // if keys.pressed(KeyCode::KeyP) {
-        //     (*speed).0 += 0.1;
-        // }
-        // if keys.pressed(KeyCode::KeyM) {
-        //     (*speed).0 -= 0.1;
-        // }
-        // if keys.pressed(KeyCode::KeyW) {
-        //     transform.translation.y += 150. * time.delta_secs() * speed.0;
-        // }
-        // if keys.pressed(KeyCode::KeyS) {
-        //     transform.translation.y -= 150. * time.delta_secs() * speed.0;
-        // }
-        // if keys.pressed(KeyCode::KeyD) {
-        //     transform.translation.x += 150. * time.delta_secs() * speed.0;
-        // }
-        // if keys.pressed(KeyCode::KeyA) {
-        //     transform.translation.x -= 150. * time.delta_secs() * speed.0;
-        // }
     }
 }
