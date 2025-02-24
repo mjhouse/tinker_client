@@ -109,7 +109,7 @@ impl Player {
             },
             target: Target(None),
             direction: Direction::BotRight,
-            transform: Transform::from_xyz(0., 0., 1.)
+            transform: Transform::from_xyz(0., 0., 2.)
         }
     }
 

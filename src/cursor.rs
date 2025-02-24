@@ -44,7 +44,7 @@ impl Cursor {
                 fps: 20.,
                 timer: CursorData::timer(20.),
             },
-            transform: Transform::from_xyz(0., 0., 0.)
+            transform: Transform::from_xyz(0., 0., 1.)
         }
     }
 }

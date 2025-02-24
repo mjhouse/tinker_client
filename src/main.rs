@@ -1,6 +1,7 @@
-use bevy::input::mouse::AccumulatedMouseScroll;
+use bevy::input::mouse::{AccumulatedMouseScroll, MouseMotion};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy_ecs_tiled::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
 mod player;
@@ -23,8 +24,10 @@ fn main() {
             })
             .set(ImagePlugin::default_nearest()))
         .add_plugins(TilemapPlugin)
+        .add_plugins(TiledMapPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(Update, player_movement)
+        .add_systems(Update, camera_movement)
         .add_systems(Update, player_animation)
         .add_systems(Update, cursor_movement)
         .add_systems(Update, cursor_animation)
@@ -44,6 +47,18 @@ fn setup(
     let text_justification = JustifyText::Center;
 
     commands.spawn(Camera2d);
+    // Load the map: ensure any tile / tileset paths are relative to assets/ folder
+    let map_handle: Handle<TiledMap> = asset_server.load("maps/tinker.tmx");
+
+    // Spawn the map with default options
+    commands.spawn((
+        TiledMapHandle(map_handle),
+        TiledMapSettings {
+            layer_positioning: LayerPositioning::Centered,
+            ..default()
+        }
+    ));
+
     commands.spawn(Player::new(
         "Mike".into(),
         &asset_server,
@@ -58,6 +73,7 @@ fn setup(
         &asset_server,
         &mut texture_atlas_layouts
     ));
+
 }
 
 fn camera_zoom(
@@ -152,6 +168,22 @@ fn cursor_movement(
             }
         }
     }
+}
+
+fn camera_movement(
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut motion: EventReader<MouseMotion>,
+    mut query: Query<&mut Transform, With<Camera>>,
+) {
+    if buttons.pressed(MouseButton::Middle) {
+        for mut transform in &mut query {
+            for event in motion.read() {
+                transform.translation.x -= event.delta.x * 4.0;
+                transform.translation.y += event.delta.y * 4.0;
+            }
+        }
+    }
+
 }
 
 fn player_movement(
