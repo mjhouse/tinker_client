@@ -1,5 +1,5 @@
 use bevy::{
-    app::AppExit, color::palettes::css::{BLACK, CRIMSON, FIRE_BRICK, GREEN, WHITE}, prelude::*, ui::{widget::NodeImageMode, FocusPolicy}
+    app::AppExit, color::palettes::css::{BLACK, CRIMSON, FIRE_BRICK, WHITE}, prelude::*, ui::{widget::NodeImageMode, FocusPolicy}
 };
 use bevy_simple_text_input::{
     TextInput, 
@@ -10,9 +10,6 @@ use bevy_simple_text_input::{
     TextInputTextFont, 
     TextInputValue
 };
-
-
-use crate::queries;
 
 use super::{despawn_view, ViewState};
 
@@ -34,20 +31,27 @@ struct OnLogin;
 #[derive(Component)]
 struct OnRegister;
 
-#[derive(Component)]
-struct LoginUsername(String);
+#[derive(Clone, Default, Eq, PartialEq, Debug, Hash, Resource)]
+struct RegisterInfo {
+    username: String,
+    password1: String,
+    password2: String
+}
+
+#[derive(Clone, Default, Eq, PartialEq, Debug, Hash, Resource)]
+struct LoginInfo {
+    username: String,
+    password: String,
+}
 
 #[derive(Component)]
-struct LoginPassword(String);
-
-#[derive(Component)]
-struct RegisterUsername(String);
-
-#[derive(Component)]
-struct RegisterPassword1(String);
-
-#[derive(Component)]
-struct RegisterPassword2(String);
+enum FormField {
+    LoginUsername,
+    LoginPassword,
+    RegisterUsername,
+    RegisterPassword1,
+    RegisterPassword2,
+}
 
 #[derive(Component)]
 enum MenuButtonAction {
@@ -82,6 +86,8 @@ pub fn main_menu(app: &mut App) {
     app
         .add_plugins(TextInputPlugin)
         .init_state::<MenuState>()
+        .init_resource::<RegisterInfo>()
+        .init_resource::<LoginInfo>()
         
         // basic menu layout view
         .add_systems(OnEnter(ViewState::Menu), menu_setup)
@@ -111,12 +117,7 @@ pub fn main_menu(app: &mut App) {
         )
             .run_if(in_state(ViewState::Menu)))
 
-        .add_systems(Update, listener_register_username.run_if(in_state(ViewState::Menu)))
-        .add_systems(Update, listener_register_password1.run_if(in_state(ViewState::Menu)))
-        .add_systems(Update, listener_register_password2.run_if(in_state(ViewState::Menu)))
-
-        .add_systems(Update, listener_login_username.run_if(in_state(ViewState::Menu)))
-        .add_systems(Update, listener_login_password.run_if(in_state(ViewState::Menu)));
+        .add_systems(Update, form_listener.run_if(in_state(ViewState::Menu)));
 }
 
 fn tab_register_system(
@@ -157,19 +158,58 @@ fn tab_login_system(
     }
 }
 
+fn form_input(parent: &mut ChildBuilder<'_>, placeholder: &str, field: FormField) {
+    parent.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            border: UiRect::all(Val::Px(2.0)),
+            padding: UiRect::all(Val::Px(10.0)),
+            ..default()
+        },
+        BorderColor(BORDER_COLOR_INACTIVE),
+        BackgroundColor(INPUT_BACKGROUND_COLOR),
+        TextInputValue("".to_string()),
+        FocusPolicy::Block,
+        TextInput,
+        TextInputTextFont(TextFont {
+            font_size: 20.,
+            ..default()
+        }),
+        TextInputTextColor(TextColor(TEXT_COLOR)),
+        TextInputPlaceholder {
+            value: placeholder.to_string(),
+            ..default()
+        },
+        TextInputInactive(true),
+        field
+    ));
+}
+
+fn form_button(parent: &mut ChildBuilder<'_>, label: &str, action: MenuButtonAction) {
+    parent
+        .spawn((
+            Button,
+            Node {
+                width: Val::Percent(100.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(NORMAL_BUTTON),
+            action
+        ))
+        .with_child((
+            Text::new(label),
+            TextColor(BLACK.into()),
+        ));
+}
+
 fn login_setup(
     mut commands: Commands, 
     query: Query<Entity, With<TabContainer>>,
 ) {
     if let Some(container) = query.iter().next() {
-
-        let button_node = Node {
-            width: Val::Percent(100.0),
-            padding: UiRect::all(Val::Px(10.0)),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        };
 
         let tab_wrapper = (
             Node {
@@ -178,10 +218,17 @@ fn login_setup(
                 align_items: AlignItems::FlexStart,
                 justify_content: JustifyContent::Center,
                 flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(20.0),
                 ..default()
             },
             OnLogin,
         );
+
+        let button_wrapper = Node {
+            column_gap: Val::Px(10.0),
+            width: Val::Percent(100.0),
+            ..default()
+        };
 
         commands
             .entity(container)
@@ -190,99 +237,17 @@ fn login_setup(
                 parent 
                     .spawn(tab_wrapper)
                     .with_children(|parent| {
-                        parent
-                            .spawn((
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    border: UiRect::all(Val::Px(2.0)),
-                                    padding: UiRect::all(Val::Px(10.0)),
-                                    margin: UiRect::bottom(Val::Px(20.0)),
-                                    ..default()
-                                },
-                                BorderColor(BORDER_COLOR_INACTIVE),
-                                BackgroundColor(INPUT_BACKGROUND_COLOR),
-                                TextInputValue("".to_string()),
-                                FocusPolicy::Block,
-                                TextInput,
-                                TextInputTextFont(TextFont {
-                                    font_size: 20.,
-                                    ..default()
-                                }),
-                                TextInputTextColor(TextColor(TEXT_COLOR)),
-                                TextInputPlaceholder {
-                                    value: "Username".to_string(),
-                                    ..default()
-                                },
-                                TextInputInactive(true),
-                                LoginUsername("".into())
-                            ));
-        
-                        parent
-                            .spawn((
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    border: UiRect::all(Val::Px(2.0)),
-                                    padding: UiRect::all(Val::Px(10.0)),
-                                    margin: UiRect::bottom(Val::Px(20.0)),
-                                    ..default()
-                                },
-                                BorderColor(BORDER_COLOR_INACTIVE),
-                                BackgroundColor(INPUT_BACKGROUND_COLOR),
-                                TextInputValue("".to_string()),
-                                FocusPolicy::Block,
-                                TextInput,
-                                TextInputTextFont(TextFont {
-                                    font_size: 20.,
-                                    ..default()
-                                }),
-                                TextInputTextColor(TextColor(TEXT_COLOR)),
-                                TextInputPlaceholder {
-                                    value: "Password".to_string(),
-                                    ..default()
-                                },
-                                TextInputInactive(true),
-                                LoginPassword("".into())
-                            ));
+
+                        form_input(parent, "Username", FormField::LoginUsername);
+                        form_input(parent, "Password", FormField::LoginPassword);
 
                         parent
-                            .spawn(
-                                Node {
-                                    margin: UiRect::top(Val::Px(20.0)),
-                                    width: Val::Percent(100.0),
-                                    ..default()
-                                }
-                            )
+                            .spawn(button_wrapper)
                             .with_children(|parent| {
-                                parent
-                                    .spawn((
-                                        Button,
-                                        Node {
-                                            margin: UiRect::right(Val::Px(10.0)),
-                                            ..button_node.clone()
-                                        },
-                                        BackgroundColor(NORMAL_BUTTON),
-                                        MenuButtonAction::Login,
-                                    ))
-                                    .with_children(|parent| {
-                                        parent.spawn((
-                                            Text::new("Login"),
-                                            TextColor(BLACK.into()),
-                                        ));
-                                    });
-        
-                                parent
-                                    .spawn((
-                                        Button,
-                                        button_node.clone(),
-                                        BackgroundColor(NORMAL_BUTTON),
-                                        MenuButtonAction::Quit,
-                                    ))
-                                    .with_children(|parent| {
-                                        parent.spawn((
-                                            Text::new("Quit"),
-                                            TextColor(BLACK.into()),
-                                        ));
-                                    });
+
+                                form_button(parent, "Login", MenuButtonAction::Login);
+                                form_button(parent, "Quit", MenuButtonAction::Quit);
+
                             });
                     });
 
@@ -297,14 +262,6 @@ fn register_setup(
 ) {
     if let Some(container) = query.iter().next() {
 
-        let button_node = Node {
-            width: Val::Percent(100.0),
-            padding: UiRect::all(Val::Px(10.0)),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        };
-
         let tab_wrapper = (
             Node {
                 width: Val::Percent(100.0),
@@ -312,10 +269,17 @@ fn register_setup(
                 align_items: AlignItems::FlexStart,
                 justify_content: JustifyContent::Center,
                 flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(20.0),
                 ..default()
             },
             OnRegister,
         );
+
+        let button_wrapper = Node {
+            column_gap: Val::Px(10.0),
+            width: Val::Percent(100.0),
+            ..default()
+        };
 
         commands
             .entity(container)
@@ -324,125 +288,18 @@ fn register_setup(
                 parent 
                     .spawn(tab_wrapper)
                     .with_children(|parent| {
-                        parent
-                            .spawn((
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    border: UiRect::all(Val::Px(2.0)),
-                                    padding: UiRect::all(Val::Px(10.0)),
-                                    margin: UiRect::bottom(Val::Px(20.0)),
-                                    ..default()
-                                },
-                                BorderColor(BORDER_COLOR_INACTIVE),
-                                BackgroundColor(INPUT_BACKGROUND_COLOR),
-                                TextInputValue("".to_string()),
-                                FocusPolicy::Block,
-                                TextInput,
-                                TextInputTextFont(TextFont {
-                                    font_size: 20.,
-                                    ..default()
-                                }),
-                                TextInputTextColor(TextColor(TEXT_COLOR)),
-                                TextInputPlaceholder {
-                                    value: "Username".to_string(),
-                                    ..default()
-                                },
-                                TextInputInactive(true),
-                                RegisterUsername("".into())
-                            ));
-        
-                        parent
-                            .spawn((
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    border: UiRect::all(Val::Px(2.0)),
-                                    padding: UiRect::all(Val::Px(10.0)),
-                                    margin: UiRect::bottom(Val::Px(20.0)),
-                                    ..default()
-                                },
-                                BorderColor(BORDER_COLOR_INACTIVE),
-                                BackgroundColor(INPUT_BACKGROUND_COLOR),
-                                TextInputValue("".to_string()),
-                                FocusPolicy::Block,
-                                TextInput,
-                                TextInputTextFont(TextFont {
-                                    font_size: 20.,
-                                    ..default()
-                                }),
-                                TextInputTextColor(TextColor(TEXT_COLOR)),
-                                TextInputPlaceholder {
-                                    value: "Password".to_string(),
-                                    ..default()
-                                },
-                                TextInputInactive(true),
-                                RegisterPassword1("".into())
-                            ));
+
+                        form_input(parent, "Username", FormField::RegisterUsername);
+                        form_input(parent, "Password", FormField::RegisterPassword1);
+                        form_input(parent, "Password (Again)", FormField::RegisterPassword2);
 
                         parent
-                            .spawn((
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    border: UiRect::all(Val::Px(2.0)),
-                                    padding: UiRect::all(Val::Px(10.0)),
-                                    ..default()
-                                },
-                                BorderColor(BORDER_COLOR_INACTIVE),
-                                BackgroundColor(INPUT_BACKGROUND_COLOR),
-                                TextInputValue("".to_string()),
-                                FocusPolicy::Block,
-                                TextInput,
-                                TextInputTextFont(TextFont {
-                                    font_size: 20.,
-                                    ..default()
-                                }),
-                                TextInputTextColor(TextColor(TEXT_COLOR)),
-                                TextInputPlaceholder {
-                                    value: "Password (Again)".to_string(),
-                                    ..default()
-                                },
-                                TextInputInactive(true),
-                                RegisterPassword2("".into())
-                            ));
-
-                        parent
-                            .spawn(
-                                Node {
-                                    margin: UiRect::top(Val::Px(20.0)),
-                                    width: Val::Percent(100.0),
-                                    ..default()
-                                }
-                            )
+                            .spawn(button_wrapper)
                             .with_children(|parent| {
-                                parent
-                                    .spawn((
-                                        Button,
-                                        Node {
-                                            margin: UiRect::right(Val::Px(10.0)),
-                                            ..button_node.clone()
-                                        },
-                                        BackgroundColor(NORMAL_BUTTON),
-                                        MenuButtonAction::Register,
-                                    ))
-                                    .with_children(|parent| {
-                                        parent.spawn((
-                                            Text::new("Register"),
-                                            TextColor(BLACK.into()),
-                                        ));
-                                    });
-        
-                                parent
-                                    .spawn((
-                                        Button,
-                                        button_node.clone(),
-                                        BackgroundColor(NORMAL_BUTTON),
-                                        MenuButtonAction::Quit,
-                                    ))
-                                    .with_children(|parent| {
-                                        parent.spawn((
-                                            Text::new("Quit"),
-                                            TextColor(BLACK.into()),
-                                        ));
-                                    });
+
+                                form_button(parent, "Register", MenuButtonAction::Register);
+                                form_button(parent, "Quit", MenuButtonAction::Quit);
+
                             });
                     });
 
@@ -620,45 +477,20 @@ fn menu_setup(
     game_state.set(MenuState::Login);
 }
 
-
-fn listener_login_username(
-    mut input_query: Query<(&mut LoginUsername,&TextInputValue),Changed<TextInputValue>>,
+fn form_listener(
+    mut query: Query<(&FormField,&TextInputValue),Changed<TextInputValue>>,
+    mut register_info: ResMut<RegisterInfo>,
+    mut login_info: ResMut<LoginInfo>,
 ) {
-    for (mut value, text_input) in &mut input_query {
-        value.0 = text_input.0.clone();
+    for (field, input) in &mut query {
+        match field {
+            FormField::LoginUsername => login_info.username = input.0.clone(),
+            FormField::LoginPassword => login_info.password = input.0.clone(),
+            FormField::RegisterUsername => register_info.username = input.0.clone(),
+            FormField::RegisterPassword1 => register_info.password1 = input.0.clone(),
+            FormField::RegisterPassword2 => register_info.password2 = input.0.clone(),
+        }
     } 
-}
-
-fn listener_login_password(
-    mut input_query: Query<(&mut LoginPassword,&TextInputValue),Changed<TextInputValue>>, 
-) {
-    for (mut value, text_input) in &mut input_query {
-        value.0 = text_input.0.clone();
-    }
-}
-
-fn listener_register_username(
-    mut input_query: Query<(&mut RegisterUsername,&TextInputValue),Changed<TextInputValue>>,
-) {
-    for (mut value, text_input) in &mut input_query {
-        value.0 = text_input.0.clone();
-    } 
-}
-
-fn listener_register_password1(
-    mut input_query: Query<(&mut RegisterPassword1,&TextInputValue),Changed<TextInputValue>>, 
-) {
-    for (mut value, text_input) in &mut input_query {
-        value.0 = text_input.0.clone();
-    }
-}
-
-fn listener_register_password2(
-    mut input_query: Query<(&mut RegisterPassword2,&TextInputValue),Changed<TextInputValue>>, 
-) {
-    for (mut value, text_input) in &mut input_query {
-        value.0 = text_input.0.clone();
-    }
 }
 
 fn button_system(
@@ -672,70 +504,6 @@ fn button_system(
             Interaction::Pressed => PRESSED_BUTTON.into(),
             Interaction::Hovered => HOVERED_BUTTON.into(),
             Interaction::None => NORMAL_BUTTON.into()
-        }
-    }
-}
-
-fn menu_action(
-    interaction_query: Query<
-        (&Interaction, &MenuButtonAction),
-        (Changed<Interaction>, With<Button>),
-    >,
-    login_username: Query<&LoginUsername>,
-    login_password: Query<&LoginPassword>,
-    register_username: Query<&RegisterUsername>,
-    register_password1: Query<&RegisterPassword1>,
-    register_password2: Query<&RegisterPassword2>,
-    mut app_exit_events: EventWriter<AppExit>,
-    mut game_state: ResMut<NextState<ViewState>>,
-) {
-    for (interaction, menu_button_action) in &interaction_query {
-        if *interaction == Interaction::Pressed {
-            match menu_button_action {
-                MenuButtonAction::Quit => {
-                    app_exit_events.send(AppExit::Success);
-                },
-                MenuButtonAction::Register => {
-                    let username = register_username.single().0.clone();
-                    let password1 = register_password1.single().0.clone();
-                    let password2 = register_password2.single().0.clone();
-
-                    println!("username:  {}",&username);
-                    println!("password1: {}",&password1);
-                    println!("password2: {}",&password2);
-
-                    let info = queries::register(
-                        username, 
-                        password1, 
-                        password2
-                    );
-
-                    dbg!(info);
-
-                },
-                MenuButtonAction::Login => {
-                    let username = login_username.single().0.clone();
-                    let password = login_password.single().0.clone();
-
-                    println!("username: {}",username);
-                    println!("password: {}",password);
-
-                    let info = queries::login(
-                        username, 
-                        password, 
-                    );
-
-                    dbg!(info);
-
-                    // 1. try to login to server using username and password
-                    // 2. on failure, set error message to display in UI
-                    // 3. on success, fetch initial game state from server
-                    // 4. create connection to server websocket
-
-                    // game_state.set(ViewState::Game);
-                },
-                _ => ()
-            }
         }
     }
 }
@@ -754,6 +522,56 @@ fn focus_system(
                     inactive.0 = true;
                     *border_color = BORDER_COLOR_INACTIVE.into();
                 }
+            }
+        }
+    }
+}
+
+fn menu_action(
+    interaction_query: Query<
+        (&Interaction, &MenuButtonAction),
+        (Changed<Interaction>, With<Button>),
+    >,
+    mut app_exit_events: EventWriter<AppExit>,
+    register_info: Res<RegisterInfo>,
+    login_info: Res<LoginInfo>,
+) {
+    for (interaction, menu_button_action) in &interaction_query {
+        if *interaction == Interaction::Pressed {
+            match menu_button_action {
+                MenuButtonAction::Quit => {
+                    app_exit_events.send(AppExit::Success);
+                },
+                MenuButtonAction::Register => {
+                    dbg!(&register_info);
+
+                    // let info = queries::register(
+                    //     username, 
+                    //     password1, 
+                    //     password2
+                    // );
+
+                    // dbg!(info);
+
+
+                },
+                MenuButtonAction::Login => {
+                    dbg!(&login_info);
+
+                    // let info = queries::login(
+                    //     username, 
+                    //     password, 
+                    // );
+
+
+                    // 1. try to login to server using username and password
+                    // 2. on failure, set error message to display in UI
+                    // 3. on success, fetch initial game state from server
+                    // 4. create connection to server websocket
+
+                    // game_state.set(ViewState::Game);
+                },
+                _ => ()
             }
         }
     }
