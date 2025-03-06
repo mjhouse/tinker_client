@@ -1,5 +1,5 @@
 use bevy::{
-    app::AppExit, color::palettes::css::{BLACK, CRIMSON, FIRE_BRICK, WHITE}, prelude::*, ui::{widget::NodeImageMode, FocusPolicy}
+    a11y::Focus, app::AppExit, color::palettes::css::{BLACK, CRIMSON, FIRE_BRICK, WHITE}, prelude::*, ui::{widget::NodeImageMode, FocusPolicy}
 };
 use bevy_simple_text_input::{
     TextInput, 
@@ -10,6 +10,8 @@ use bevy_simple_text_input::{
     TextInputTextFont, 
     TextInputValue
 };
+
+use crate::{queries, state::ConnectionState};
 
 use super::{despawn_view, ViewState};
 
@@ -93,31 +95,52 @@ pub fn main_menu(app: &mut App) {
         .add_systems(OnEnter(ViewState::Menu), menu_setup)
         .add_systems(OnExit(ViewState::Menu), despawn_view::<OnMenu>)
 
-        // These run in the GameSet::Second, which comes after GameSet::First
         .add_systems(Update, tab_register_system
             .run_if(in_state(ViewState::Menu)))
         .add_systems(Update, tab_login_system
             .run_if(in_state(ViewState::Menu)))
 
-        // Login setup system runs in GameSet::Second, after menu_setup
         .add_systems(OnEnter(MenuState::Login), login_setup
             .run_if(in_state(ViewState::Menu)))
         .add_systems(OnExit(MenuState::Login), despawn_view::<OnLogin>)
 
-        // Register setup system runs in GameSet::Second, after menu_setup
         .add_systems(OnEnter(MenuState::Register), register_setup
             .run_if(in_state(ViewState::Menu)))
         .add_systems(OnExit(MenuState::Register), despawn_view::<OnRegister>)
 
-        // Update systems run in GameSet::Second
         .add_systems(Update, (
             button_system,
             menu_action,
             focus_system,
+            handle_tab_key
         )
             .run_if(in_state(ViewState::Menu)))
 
         .add_systems(Update, form_listener.run_if(in_state(ViewState::Menu)));
+}
+
+fn handle_tab_key(
+    keys: Res<ButtonInput<KeyCode>>, 
+    mut commands: Commands,
+    mut focusable: Query<&mut TextInputInactive, With<TextInput>>,
+) {
+    if keys.just_pressed(KeyCode::Tab) {
+
+        for mut item in focusable.iter_mut() {
+            item.0 = true;
+        }
+
+        
+        // // Remove existing focus
+        // for entity in focused.iter() {
+        //     commands.entity(entity).remove::<Focus>();
+        // }
+        
+        // // Set new focus
+        // if let Some(next_field) = get_next_field(&input_fields) {
+        //     commands.entity(next_field).insert(Focus);
+        // }
+    }
 }
 
 fn tab_register_system(
@@ -528,10 +551,12 @@ fn focus_system(
 }
 
 fn menu_action(
+    mut game_state: ResMut<NextState<MenuState>>,
     interaction_query: Query<
         (&Interaction, &MenuButtonAction),
         (Changed<Interaction>, With<Button>),
     >,
+    mut connection_state: ResMut<ConnectionState>,
     mut app_exit_events: EventWriter<AppExit>,
     register_info: Res<RegisterInfo>,
     login_info: Res<LoginInfo>,
@@ -543,33 +568,29 @@ fn menu_action(
                     app_exit_events.send(AppExit::Success);
                 },
                 MenuButtonAction::Register => {
-                    dbg!(&register_info);
 
-                    // let info = queries::register(
-                    //     username, 
-                    //     password1, 
-                    //     password2
-                    // );
+                    let info = queries::register(
+                        register_info.username.clone(), 
+                        register_info.password1.clone(), 
+                        register_info.password2.clone()
+                    );
 
-                    // dbg!(info);
+                    dbg!(info);
 
-
+                    game_state.set(MenuState::Login);
                 },
                 MenuButtonAction::Login => {
-                    dbg!(&login_info);
 
-                    // let info = queries::login(
-                    //     username, 
-                    //     password, 
-                    // );
+                    let info = queries::login(
+                        login_info.username.clone(), 
+                        login_info.password.clone(), 
+                    );
 
+                    connection_state.id = info.id;
+                    connection_state.username = info.name;
+                    connection_state.token = Some(info.token.clone());
 
-                    // 1. try to login to server using username and password
-                    // 2. on failure, set error message to display in UI
-                    // 3. on success, fetch initial game state from server
-                    // 4. create connection to server websocket
-
-                    // game_state.set(ViewState::Game);
+                    
                 },
                 _ => ()
             }

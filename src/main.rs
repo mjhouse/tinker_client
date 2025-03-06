@@ -4,9 +4,12 @@ use bevy_ecs_tilemap::prelude::*;
 
 mod player;
 mod cursor;
-mod views;
 mod queries;
+mod views;
+mod state;
 
+use bevy_ui_navigation::DefaultNavigationPlugins;
+use state::ConnectionState;
 use views::ViewState;
 
 fn main() {
@@ -23,7 +26,9 @@ fn main() {
             })
             .set(ImagePlugin::default_nearest()))
 
-            .add_plugins(TilemapPlugin)
+        .init_resource::<ConnectionState>()
+
+        .add_plugins(TilemapPlugin)
         .add_plugins(TiledMapPlugin::default())
 
         .init_state::<ViewState>()

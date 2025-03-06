@@ -15,16 +15,16 @@ pub struct LoginForm {
 
 #[derive(Serialize,Deserialize,Debug)]
 pub struct AccountInfo {
-    id: i32,
-    name: String,
-    character_id: Option<i32>
+    pub id: i32,
+    pub name: String,
+    pub character_id: Option<i32>
 }
 
 #[derive(Serialize,Deserialize,Debug)]
 pub struct AccountKey {
-    id: i32,
-    name: String,
-    token: String,
+    pub id: i32,
+    pub name: String,
+    pub token: String,
 }
 
 pub fn register<T: ToString>(username: T, password1: T, password2: T) -> AccountInfo {
@@ -48,7 +48,7 @@ pub fn register<T: ToString>(username: T, password1: T, password2: T) -> Account
     serde_json::from_slice(text.as_bytes()).unwrap()
 }
 
-pub fn login<T: ToString>(username: T, password: T) -> AccountInfo {
+pub fn login<T: ToString>(username: T, password: T) -> AccountKey {
     const URL: &str = "http://localhost:8080/login";
 
     let username = username.to_string();
