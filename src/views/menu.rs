@@ -33,6 +33,9 @@ struct OnLogin;
 #[derive(Component)]
 struct OnRegister;
 
+#[derive(Component)]
+struct OnError;
+
 #[derive(Clone, Default, Eq, PartialEq, Debug, Hash, Resource)]
 struct RegisterInfo {
     username: String,
@@ -46,8 +49,17 @@ struct LoginInfo {
     password: String,
 }
 
-#[derive(Component)]
+#[derive(Copy, Clone, PartialEq, Debug, Component)]
 enum FormField {
+    LoginUsername,
+    LoginPassword,
+    RegisterUsername,
+    RegisterPassword1,
+    RegisterPassword2,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug, Component)]
+enum NextField {
     LoginUsername,
     LoginPassword,
     RegisterUsername,
@@ -121,25 +133,31 @@ pub fn main_menu(app: &mut App) {
 
 fn handle_tab_key(
     keys: Res<ButtonInput<KeyCode>>, 
-    mut commands: Commands,
-    mut focusable: Query<&mut TextInputInactive, With<TextInput>>,
+    mut focusable: Query<(&mut TextInputInactive, &mut BorderColor, &NextField, &FormField), With<TextInput>>,
 ) {
     if keys.just_pressed(KeyCode::Tab) {
 
-        for mut item in focusable.iter_mut() {
-            item.0 = true;
+        let mut next_field: Option<NextField> = None;
+
+        for (mut item, mut border, next, _) in focusable.iter_mut() {
+            if !item.0 {
+                border.0 = BORDER_COLOR_INACTIVE;
+                item.0 = true;
+                next_field = Some(*next);
+            }
         }
 
-        
-        // // Remove existing focus
-        // for entity in focused.iter() {
-        //     commands.entity(entity).remove::<Focus>();
-        // }
-        
-        // // Set new focus
-        // if let Some(next_field) = get_next_field(&input_fields) {
-        //     commands.entity(next_field).insert(Focus);
-        // }
+        if let Some(field) = next_field {
+            for (mut item, mut border, _, current) in focusable.iter_mut() {
+                let a = field as usize;
+                let b = *current as usize;
+
+                if a == b {
+                    border.0 = BORDER_COLOR_ACTIVE;
+                    item.0 = false;
+                }
+            }
+        }
     }
 }
 
@@ -181,7 +199,7 @@ fn tab_login_system(
     }
 }
 
-fn form_input(parent: &mut ChildBuilder<'_>, placeholder: &str, field: FormField) {
+fn form_input(parent: &mut ChildBuilder<'_>, placeholder: &str, field: FormField, next: NextField) {
     parent.spawn((
         Node {
             width: Val::Percent(100.0),
@@ -204,7 +222,8 @@ fn form_input(parent: &mut ChildBuilder<'_>, placeholder: &str, field: FormField
             ..default()
         },
         TextInputInactive(true),
-        field
+        field,
+        next
     ));
 }
 
@@ -261,8 +280,8 @@ fn login_setup(
                     .spawn(tab_wrapper)
                     .with_children(|parent| {
 
-                        form_input(parent, "Username", FormField::LoginUsername);
-                        form_input(parent, "Password", FormField::LoginPassword);
+                        form_input(parent, "Username", FormField::LoginUsername, NextField::LoginPassword);
+                        form_input(parent, "Password", FormField::LoginPassword, NextField::LoginUsername);
 
                         parent
                             .spawn(button_wrapper)
@@ -312,9 +331,9 @@ fn register_setup(
                     .spawn(tab_wrapper)
                     .with_children(|parent| {
 
-                        form_input(parent, "Username", FormField::RegisterUsername);
-                        form_input(parent, "Password", FormField::RegisterPassword1);
-                        form_input(parent, "Password (Again)", FormField::RegisterPassword2);
+                        form_input(parent, "Username", FormField::RegisterUsername, NextField::RegisterPassword1);
+                        form_input(parent, "Password", FormField::RegisterPassword1, NextField::RegisterPassword2);
+                        form_input(parent, "Password (Again)", FormField::RegisterPassword2, NextField::RegisterUsername);
 
                         parent
                             .spawn(button_wrapper)
@@ -384,6 +403,26 @@ fn menu_setup(
             margin: UiRect::all(Val::Px(20.0)),
             ..default()
         },
+    );
+
+    let error_wrapper = (
+        Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(WHITE.into())
+    );
+
+    let error_text = (
+        Text::new(""),
+        TextColor(CRIMSON.into()),
+        TextFont {
+            font_size: 20.0,
+            ..default()
+        },
+        OnError
     );
 
     let dialog_wrapper = Node {
@@ -478,6 +517,10 @@ fn menu_setup(
                 .with_child(title);
 
             parent
+                .spawn(error_wrapper)
+                .with_child(error_text);
+
+            parent
                 .spawn(dialog_wrapper)
                 .with_children(|parent| {
                     parent
@@ -556,12 +599,14 @@ fn menu_action(
         (&Interaction, &MenuButtonAction),
         (Changed<Interaction>, With<Button>),
     >,
+    mut error_query: Query<&mut Text, With<OnError>>,
     mut connection_state: ResMut<ConnectionState>,
     mut app_exit_events: EventWriter<AppExit>,
     register_info: Res<RegisterInfo>,
     login_info: Res<LoginInfo>,
 ) {
     for (interaction, menu_button_action) in &interaction_query {
+        let mut error_message = error_query.single_mut();
         if *interaction == Interaction::Pressed {
             match menu_button_action {
                 MenuButtonAction::Quit => {
@@ -575,9 +620,13 @@ fn menu_action(
                         register_info.password2.clone()
                     );
 
-                    dbg!(info);
+                    if info.is_ok() {
+                        game_state.set(MenuState::Login);
+                    } else {
+                        // display failure in UI
+                        error_message.0 = "Registration failed".into();
+                    }
 
-                    game_state.set(MenuState::Login);
                 },
                 MenuButtonAction::Login => {
 
@@ -586,10 +635,14 @@ fn menu_action(
                         login_info.password.clone(), 
                     );
 
-                    connection_state.id = info.id;
-                    connection_state.username = info.name;
-                    connection_state.token = Some(info.token.clone());
-
+                    if let Ok(data) = info {
+                        connection_state.id = data.id;
+                        connection_state.username = data.name;
+                        connection_state.token = Some(data.token.clone());
+                    } else {
+                        // display failure in UI
+                        error_message.0 = "Login failed".into();
+                    }
                     
                 },
                 _ => ()

@@ -2,13 +2,13 @@ use bevy::prelude::*;
 use bevy_ecs_tiled::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
+mod errors;
 mod player;
 mod cursor;
 mod queries;
 mod views;
 mod state;
 
-use bevy_ui_navigation::DefaultNavigationPlugins;
 use state::ConnectionState;
 use views::ViewState;
 

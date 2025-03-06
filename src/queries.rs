@@ -1,4 +1,6 @@
+use reqwest::StatusCode;
 use serde::{Serialize,Deserialize};
+use crate::errors::{Error, Result};
 
 #[derive(Serialize,Deserialize,Debug)]
 pub struct RegisterForm {
@@ -27,7 +29,7 @@ pub struct AccountKey {
     pub token: String,
 }
 
-pub fn register<T: ToString>(username: T, password1: T, password2: T) -> AccountInfo {
+pub fn register<T: ToString>(username: T, password1: T, password2: T) -> Result<AccountInfo> {
     const URL: &str = "http://localhost:8080/register";
 
     let username = username.to_string();
@@ -42,13 +44,17 @@ pub fn register<T: ToString>(username: T, password1: T, password2: T) -> Account
             password1,
             password2
         })
-        .send();
+        .send()?;
 
-    let text = response.unwrap().text().unwrap();
-    serde_json::from_slice(text.as_bytes()).unwrap()
+    if response.status().is_success() {
+        let text = response.text()?;
+        Ok(serde_json::from_slice(text.as_bytes())?)
+    } else {
+        Err(Error::RegisterFailed)
+    }
 }
 
-pub fn login<T: ToString>(username: T, password: T) -> AccountKey {
+pub fn login<T: ToString>(username: T, password: T) -> Result<AccountKey> {
     const URL: &str = "http://localhost:8080/login";
 
     let username = username.to_string();
@@ -61,8 +67,12 @@ pub fn login<T: ToString>(username: T, password: T) -> AccountKey {
             username,
             password,
         })
-        .send();
+        .send()?;
 
-    let text = response.unwrap().text().unwrap();
-    serde_json::from_slice(text.as_bytes()).unwrap()
+    if response.status().is_success() {
+        let text = response.text()?;
+        Ok(serde_json::from_slice(text.as_bytes())?)
+    } else {
+        Err(Error::LoginFailed)
+    }
 }
