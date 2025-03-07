@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, window::WindowCloseRequested};
 use bevy_ecs_tiled::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
@@ -36,6 +36,7 @@ fn main() {
         .add_plugins(views::game::main_game)
 
         .add_systems(Startup, setup)
+        .add_systems(PostUpdate, shutdown)
         .run();
 }
 
@@ -45,4 +46,22 @@ fn setup(
     // mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
     commands.spawn(Camera2d);
+}
+
+fn shutdown(
+    mut exits: EventReader<AppExit>, 
+    mut closes: EventReader<WindowCloseRequested>
+) {
+    use views::game::SOCKET_CLIENT;
+    
+    let exit_count = exits.read().count();
+    let close_count = closes.read().count();
+
+    if exit_count > 0 || close_count > 0 {
+        if let Ok(mut client) = SOCKET_CLIENT.lock() {
+            if let Some(c) = client.as_mut() {
+                let _ = c.close(None);
+            }
+        }
+    }
 }

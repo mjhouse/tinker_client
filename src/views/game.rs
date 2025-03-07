@@ -1,18 +1,30 @@
+use std::net::TcpStream;
+use std::sync::Mutex;
+
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseMotion};
 use bevy::window::PrimaryWindow;
 use bevy_ecs_tiled::prelude::*;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
+use tungstenite::stream::MaybeTlsStream;
+use tungstenite::{connect, Message, WebSocket};
 
 use crate::cursor::{Cursor, CursorData, CursorType};
 use crate::player::{Direction, Graphic, Player, PlayerType, Speed, Target};
+use crate::state::ConnectionState;
+use once_cell::sync::Lazy;
 
 use super::{despawn_view, ViewState};
+
+type WebSocketAlias = WebSocket<MaybeTlsStream<TcpStream>>;
+pub static SOCKET_CLIENT: Lazy<Mutex<Option<WebSocketAlias>>> = Lazy::new(|| { Default::default() });
 
 #[derive(Component)]
 struct OnGame;
 
 pub fn main_game(app: &mut App) {
     app
+        .add_systems(OnEnter(ViewState::Game), connection)
         .add_systems(OnEnter(ViewState::Game), game_setup)
         .add_systems(OnExit(ViewState::Game), despawn_view::<OnGame>)
         .add_systems(Update, player_movement.run_if(in_state(ViewState::Game)))
@@ -23,8 +35,56 @@ pub fn main_game(app: &mut App) {
         .add_systems(Update, camera_zoom.run_if(in_state(ViewState::Game)));
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub enum MessageValue {
+    Move(MoveMessage),
+    Attack(AttackMessage),
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct MoveMessage {
+    pub token: String,
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AttackMessage {
+    pub token: String,
+    pub target: i32,
+    pub ability: i32,
+}
+
+fn connection(
+    state: Res<ConnectionState>,
+) {
+    let mut client = SOCKET_CLIENT.lock().unwrap();
+
+    if client.is_none() && state.token.is_some() {
+
+        let token = state.token.clone().unwrap();
+        let url = format!("ws://localhost:8080/connect/{}",token);
+
+        if let Ok((socket, _)) = connect(url) {
+            client.replace(socket);
+        }
+    }
+}
+
+fn broadcast(
+    value: MessageValue
+) {
+    let mut socket_client = SOCKET_CLIENT.lock().unwrap();
+
+    if let Some(client) = socket_client.as_mut() {
+        let message = serde_json::to_string(&value).unwrap();
+        let _ = client.send(Message::Text(message.into()));
+    }
+}
+
 fn game_setup(
     mut commands: Commands,
+    state: Res<ConnectionState>,
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
@@ -48,12 +108,12 @@ fn game_setup(
     ));
 
     commands.spawn((Player::new(
-        "Mike".into(),
+        state.username.clone(),
         &asset_server,
         &mut texture_atlas_layouts
     ), OnGame)
     ).with_child((
-        Text2d::new("Mike"),
+        Text2d::new(state.username.clone()),
         text_font.clone(),
         Transform::from_translation(Vec3::new(0.0, 260.0, 1.0)),
         TextLayout::new_with_justify(text_justification),
@@ -187,6 +247,7 @@ fn player_movement(
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform)>,
+    state: Res<ConnectionState>,
 ) {
     let (camera, camera_transform) = camera.single();
 
@@ -216,6 +277,15 @@ fn player_movement(
                 let amount = 1000. * time.delta_secs() * movement;
                 let npos = cpos + direction * amount;
                 transform.translation = npos;
+
+                if let Some(token) = state.token.clone() {
+                    broadcast(MessageValue::Move(MoveMessage {
+                        token,
+                        x: npos.x,
+                        y: npos.y,
+                    }));
+                }
+
             } else {
                 (*target).0 = None;
             }

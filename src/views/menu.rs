@@ -594,7 +594,8 @@ fn focus_system(
 }
 
 fn menu_action(
-    mut game_state: ResMut<NextState<MenuState>>,
+    mut view_state: ResMut<NextState<ViewState>>,
+    mut menu_state: ResMut<NextState<MenuState>>,
     interaction_query: Query<
         (&Interaction, &MenuButtonAction),
         (Changed<Interaction>, With<Button>),
@@ -621,7 +622,7 @@ fn menu_action(
                     );
 
                     if info.is_ok() {
-                        game_state.set(MenuState::Login);
+                        menu_state.set(MenuState::Login);
                     } else {
                         // display failure in UI
                         error_message.0 = "Registration failed".into();
@@ -639,6 +640,7 @@ fn menu_action(
                         connection_state.id = data.id;
                         connection_state.username = data.name;
                         connection_state.token = Some(data.token.clone());
+                        view_state.set(ViewState::Game)
                     } else {
                         // display failure in UI
                         error_message.0 = "Login failed".into();

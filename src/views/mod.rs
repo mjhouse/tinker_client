@@ -4,7 +4,7 @@ use bevy::prelude::*;
 pub enum ViewState {
     #[default]
     Menu,
-    Game,
+    Game
 }
 
 // Generic system that takes a component as a parameter, and will despawn all entities with that component
