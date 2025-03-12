@@ -1,7 +1,10 @@
+use std::{sync::atomic::Ordering, time::Duration};
+
 use bevy::{prelude::*, window::WindowCloseRequested};
 use bevy_ecs_tiled::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
+mod plugins;
 mod errors;
 mod player;
 mod cursor;
@@ -10,7 +13,7 @@ mod views;
 mod state;
 
 use state::ConnectionState;
-use views::ViewState;
+use views::{game::SHUTDOWN, ViewState};
 
 fn main() {
     App::new()
@@ -52,16 +55,12 @@ fn shutdown(
     mut exits: EventReader<AppExit>, 
     mut closes: EventReader<WindowCloseRequested>
 ) {
-    use views::game::SOCKET_CLIENT;
-    
     let exit_count = exits.read().count();
     let close_count = closes.read().count();
 
     if exit_count > 0 || close_count > 0 {
-        if let Ok(mut client) = SOCKET_CLIENT.lock() {
-            if let Some(c) = client.as_mut() {
-                let _ = c.close(None);
-            }
-        }
+        println!("REQUESTING SHUTDOWN");
+        SHUTDOWN.store(true, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_secs(1));
     }
 }

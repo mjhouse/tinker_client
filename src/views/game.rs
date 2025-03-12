@@ -1,32 +1,44 @@
-use std::net::TcpStream;
-use std::sync::Mutex;
-
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+use chrono::{DateTime, Utc};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseMotion};
 use bevy::window::PrimaryWindow;
 use bevy_ecs_tiled::prelude::*;
 use bevy::prelude::*;
+use futures_util::future::{select, Either};
+use async_std::task::sleep;
+use futures_util::lock::Mutex;
+use futures_util::pin_mut;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{connect, Message, WebSocket};
+use async_tungstenite::async_std::connect_async;
+use tungstenite::Message;
+use uuid::Uuid;
+use futures_util::stream::StreamExt;
 
 use crate::cursor::{Cursor, CursorData, CursorType};
 use crate::player::{Direction, Graphic, Player, PlayerType, Speed, Target};
 use crate::state::ConnectionState;
-use once_cell::sync::Lazy;
+use bevy::tasks::IoTaskPool;
 
 use super::{despawn_view, ViewState};
 
-type WebSocketAlias = WebSocket<MaybeTlsStream<TcpStream>>;
-pub static SOCKET_CLIENT: Lazy<Mutex<Option<WebSocketAlias>>> = Lazy::new(|| { Default::default() });
+pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+pub static INCOMING_QUEUE: Lazy<Mutex<VecDeque<MessageValue>>> = Lazy::new(|| { Default::default() });
+pub static OUTGOING_QUEUE: Lazy<Mutex<VecDeque<MessageValue>>> = Lazy::new(|| { Default::default() });
 
 #[derive(Component)]
 struct OnGame;
 
 pub fn main_game(app: &mut App) {
     app
-        .add_systems(OnEnter(ViewState::Game), connection)
+        .add_systems(OnEnter(ViewState::Game), socket_connection)
+        .add_systems(Update, handle_messages.run_if(in_state(ViewState::Game)))
+
         .add_systems(OnEnter(ViewState::Game), game_setup)
         .add_systems(OnExit(ViewState::Game), despawn_view::<OnGame>)
+
         .add_systems(Update, player_movement.run_if(in_state(ViewState::Game)))
         .add_systems(Update, camera_movement.run_if(in_state(ViewState::Game)))
         .add_systems(Update, player_animation.run_if(in_state(ViewState::Game)))
@@ -36,14 +48,42 @@ pub fn main_game(app: &mut App) {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct Character {
+    pub id: i32,
+    pub name: String,
+    pub created: DateTime<Utc>,
+    pub account_id: i32,
+    pub x: f32,
+    pub y: f32,
+    pub modified: DateTime<Utc>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum MessageValue {
     Move(MoveMessage),
     Attack(AttackMessage),
+    Initial(InitialMessage),
+    Connect(ConnectMessage),
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct InitialMessage {
+    pub token: String,
+    pub id: Uuid,
+    pub entities: Vec<Character>
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ConnectMessage {
+    pub token: String,
+    pub id: Uuid,
+    pub entity: Character
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct MoveMessage {
     pub token: String,
+    pub id: Uuid,
     pub x: f32,
     pub y: f32,
 }
@@ -51,34 +91,86 @@ pub struct MoveMessage {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct AttackMessage {
     pub token: String,
+    pub id: Uuid,
     pub target: i32,
     pub ability: i32,
 }
 
-fn connection(
-    state: Res<ConnectionState>,
-) {
-    let mut client = SOCKET_CLIENT.lock().unwrap();
 
-    if client.is_none() && state.token.is_some() {
-
-        let token = state.token.clone().unwrap();
-        let url = format!("ws://localhost:8080/connect/{}",token);
-
-        if let Ok((socket, _)) = connect(url) {
-            client.replace(socket);
-        }
+fn broadcast(message: MessageValue) {
+    // TODO: change this to use an mpsc channel to enqueue outgoing messages
+    // TODO: change the socket_connection_task to use mpsc channel to send incoming messages
+    if let Some(mut queue) = OUTGOING_QUEUE.try_lock() {
+        queue.push_back(message);
     }
 }
 
-fn broadcast(
-    value: MessageValue
+fn handle_messages(
+    state: Res<ConnectionState>,
 ) {
-    let mut socket_client = SOCKET_CLIENT.lock().unwrap();
+    IoTaskPool::get().spawn(handle_messages_task(state.clone())).detach();
+}
 
-    if let Some(client) = socket_client.as_mut() {
-        let message = serde_json::to_string(&value).unwrap();
-        let _ = client.send(Message::Text(message.into()));
+fn socket_connection(
+    state: Res<ConnectionState>,
+) {
+    IoTaskPool::get().spawn(socket_connection_task(state.clone())).detach();
+}
+
+async fn handle_messages_task(
+    state: ConnectionState
+) {
+    for message in INCOMING_QUEUE.lock().await.drain(..) {
+
+        // 1. get connect/initial messages
+        // 2. for entities in each message, spawn a player
+        // 3. get disconnect messages
+        // 4. for entities in each message, despawn a player
+        // 5. get move messages
+        // 6. for each message, update the position of a player
+
+        dbg!(message);
+    }
+}
+
+async fn socket_connection_task(
+    state: ConnectionState
+) {
+    if let Some(token) = state.token {
+        let url = format!("ws://localhost:8080/connect/{}",token);
+    
+        let (mut stream, _) = connect_async(&url)
+            .await
+            .expect("Failed to connect");
+
+        loop {
+            // create timeout and stream futures
+            let timeout = sleep(Duration::from_millis(100));
+            let source = stream.next();
+
+            pin_mut!(timeout);
+
+            // check for incoming messages from the server
+            if let Either::Left((result, _)) = select(source,timeout).await {
+                if let Some(Ok(Message::Text(value))) = result {
+                    let message = serde_json::from_slice(value.as_bytes()).unwrap();
+                    INCOMING_QUEUE.lock().await.push_back(message);
+                }
+            }
+
+            // send outgoing messages to the server
+            while let Some(value) = OUTGOING_QUEUE.lock().await.pop_front() {
+                let message = serde_json::to_string(&value).unwrap();
+                stream.send(Message::text(message)).await.unwrap();
+            }
+
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                println!("SHUTTING DOWN");
+                stream.close(None).await.unwrap();
+                break;
+            }
+
+        }
     }
 }
 
@@ -281,6 +373,7 @@ fn player_movement(
                 if let Some(token) = state.token.clone() {
                     broadcast(MessageValue::Move(MoveMessage {
                         token,
+                        id: Uuid::now_v7(),
                         x: npos.x,
                         y: npos.y,
                     }));

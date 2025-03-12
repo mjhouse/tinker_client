@@ -11,7 +11,7 @@ use bevy_simple_text_input::{
     TextInputValue
 };
 
-use crate::{queries, state::ConnectionState};
+use crate::{plugins::button::{MyButton, MyButtonLabel}, queries, state::ConnectionState};
 
 use super::{despawn_view, ViewState};
 
@@ -67,8 +67,9 @@ enum NextField {
     RegisterPassword2,
 }
 
-#[derive(Component)]
+#[derive(Component, Default)]
 enum MenuButtonAction {
+    #[default]
     Login,
     Register,
     LoginTab,
@@ -99,6 +100,9 @@ const INPUT_BACKGROUND_COLOR: Color = Color::srgb(0.598, 0.033, 0.033);
 pub fn main_menu(app: &mut App) {
     app
         .add_plugins(TextInputPlugin)
+        // .add_plugins(ButtonPlugin)
+
+
         .init_state::<MenuState>()
         .init_resource::<RegisterInfo>()
         .init_resource::<LoginInfo>()
@@ -229,22 +233,8 @@ fn form_input(parent: &mut ChildBuilder<'_>, placeholder: &str, field: FormField
 
 fn form_button(parent: &mut ChildBuilder<'_>, label: &str, action: MenuButtonAction) {
     parent
-        .spawn((
-            Button,
-            Node {
-                width: Val::Percent(100.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(NORMAL_BUTTON),
-            action
-        ))
-        .with_child((
-            Text::new(label),
-            TextColor(BLACK.into()),
-        ));
+        .spawn(MyButton::new(action))
+        .with_child(MyButtonLabel::new(label));
 }
 
 fn login_setup(
@@ -287,8 +277,16 @@ fn login_setup(
                             .spawn(button_wrapper)
                             .with_children(|parent| {
 
-                                form_button(parent, "Login", MenuButtonAction::Login);
-                                form_button(parent, "Quit", MenuButtonAction::Quit);
+                                parent
+                                    .spawn(MyButton::new(MenuButtonAction::Login))
+                                    .with_child(MyButtonLabel::new("Login"));
+
+                                parent
+                                    .spawn(MyButton::new(MenuButtonAction::Quit))
+                                    .with_child(MyButtonLabel::new("Quit"));
+
+                                // form_button(parent, "Login", MenuButtonAction::Login);
+                                // form_button(parent, "Quit", MenuButtonAction::Quit);
 
                             });
                     });
