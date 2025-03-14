@@ -1,5 +1,4 @@
-use std::{sync::atomic::Ordering, time::Duration};
-
+use std::sync::atomic::Ordering;
 use bevy::{prelude::*, window::WindowCloseRequested};
 use bevy_ecs_tiled::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
@@ -13,7 +12,7 @@ mod views;
 mod state;
 
 use state::ConnectionState;
-use views::{game::SHUTDOWN, ViewState};
+use views::{game::{RUNNING, SHUTDOWN, SHUTDOWN_BARRIER}, ViewState};
 
 fn main() {
     App::new()
@@ -59,8 +58,9 @@ fn shutdown(
     let close_count = closes.read().count();
 
     if exit_count > 0 || close_count > 0 {
-        println!("REQUESTING SHUTDOWN");
-        SHUTDOWN.store(true, Ordering::Relaxed);
-        std::thread::sleep(Duration::from_secs(1));
+        if RUNNING.load(Ordering::Relaxed) {
+            SHUTDOWN.store(true, Ordering::Relaxed);
+            SHUTDOWN_BARRIER.wait();
+        }
     }
 }

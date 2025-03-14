@@ -1,8 +1,12 @@
 use bevy::prelude::*;
 use std::time::Duration;
+use crate::views::game::OnGame;
 
 #[derive(Component, Default)]
 pub struct PlayerType;
+
+#[derive(Component, Default)]
+pub struct EntityType;
 
 #[derive(Component, Clone, Copy)]
 pub enum Direction {
@@ -36,9 +40,11 @@ impl Direction {
 }
 
 #[derive(Bundle)]
-pub struct Player {
+pub struct Player<T = PlayerType>
+where T: Sync + Send + Component + Default
+{
     id: AccountId,
-    kind: PlayerType,
+    kind: T,
     name: Name,
     experience: Experience,
     health: Health,
@@ -48,26 +54,28 @@ pub struct Player {
     target: Target,
     direction: Direction,
     transform: Transform,
+    marker: OnGame,
 }
 
-impl Player {
-
-    pub fn new(
+impl Player
+{
+    pub fn new<T>(
         id: i32,
-        name: String,
         assets: &Res<AssetServer>,
         atlas: &mut ResMut<Assets<TextureAtlasLayout>>
-    ) -> Self {
+    ) -> Player<T> 
+        where T: Sync + Send + Component + Default
+    {
 
         let path = "sprites/character2.png";
         let texture: Handle<Image> = assets.load(path);
         let layout = TextureAtlasLayout::from_grid(UVec2::new(255,512), 6, 3, None, None);
         let handle = atlas.add(layout);
 
-        Self {
+        Player {
             id: AccountId(id),
             kind: Default::default(),
-            name: Name(name),
+            name: Name(String::new()),
             experience: Experience { 
                 current: 0, 
                 level: 1 
@@ -78,7 +86,8 @@ impl Player {
             },
             speed: Speed {
                 walking: 2,
-                running: 6
+                running: 6,
+                fixed: None
             },
             graphic: Graphic {
                 idle: Animation {
@@ -112,13 +121,44 @@ impl Player {
             },
             target: Target(None),
             direction: Direction::BotRight,
-            transform: Transform::from_xyz(0., 0., 2.)
+            transform: Transform::from_xyz(0., 0., 2.),
+            marker: OnGame
         }
     }
+}
 
+impl<T> Player<T>
+where 
+    T: Sync + Send + Component + Default
+{
     pub fn with_position(mut self, x: f32, y: f32, z: f32) -> Self {
         self.transform = Transform::from_xyz(x, y, z);
         self
+    }
+
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name.0 = name;
+        self
+    }
+
+    pub fn with_speed(mut self, speed: f32) -> Self {
+        self.speed.fixed = Some(speed);
+        self
+    }
+
+    pub fn build(self, commands: &mut Commands) {
+        let name = self.name.0.clone();
+        commands
+            .spawn(self)
+            .with_child((
+                Text2d::new(name),
+                TextFont {
+                    font_size: 50.0,
+                    ..default()
+                },
+                Transform::from_translation(Vec3::new(0.0, 260.0, 1.0)),
+                TextLayout::new_with_justify(JustifyText::Center),
+            ));
     }
 
 }
@@ -139,10 +179,8 @@ pub struct Experience {
 pub struct Speed {
     pub walking: usize,
     pub running: usize,
+    pub fixed: Option<f32>
 }
-
-#[derive(Component, Debug)]
-pub struct SpeedValue(pub f32);
 
 #[derive(Component, Debug)]
 pub struct Health {

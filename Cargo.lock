@@ -4992,7 +4992,7 @@ dependencies = [
 [[package]]
 name = "tinker_records"
 version = "0.1.0"
-source = "git+https://github.com/mjhouse/tinker_records.git#e4c739872793dcf9b098d7c031e470c5667d71ca"
+source = "git+https://github.com/mjhouse/tinker_records.git#866f94a65a0a885257280c97be6d918de68eb37d"
 dependencies = [
  "chrono",
  "diesel",

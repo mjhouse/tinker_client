@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Barrier;
 use std::time::Duration;
 use chrono::{DateTime, Utc};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseMotion};
@@ -17,18 +18,21 @@ use tungstenite as ts;
 use futures_util::stream::StreamExt;
 
 use crate::cursor::{Cursor, CursorData, CursorType};
-use crate::player::{AccountId, Direction, Graphic, Player, PlayerType, Speed, SpeedValue, Target};
+use crate::player::{AccountId, Direction, EntityType, Graphic, Player, PlayerType, Speed, Target};
 use crate::state::ConnectionState;
 use bevy::tasks::IoTaskPool;
 
 use super::{despawn_view, ViewState};
 
+pub static RUNNING: AtomicBool = AtomicBool::new(false);
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+pub static SHUTDOWN_BARRIER: Barrier = Barrier::new(2);
+
 pub static INCOMING_QUEUE: Lazy<Mutex<VecDeque<Message>>> = Lazy::new(|| { Default::default() });
 pub static OUTGOING_QUEUE: Lazy<Mutex<VecDeque<Message>>> = Lazy::new(|| { Default::default() });
 
 #[derive(Component)]
-struct OnGame;
+pub struct OnGame;
 
 pub fn main_game(app: &mut App) {
     app
@@ -90,20 +94,15 @@ async fn handle_messages_task(
 fn process_messages(
     mut query: Query<(
         &AccountId,
-        &mut SpeedValue,
+        &mut Speed,
         &mut Target,
-    ),With<PlayerType>>,
+    ),With<EntityType>>,
+    delete_query: Query<(Entity,&AccountId), With<EntityType>>,
     channel: Option<Res<ConnectionChannel>>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    let text_font = TextFont {
-        font_size: 50.0,
-        ..default()
-    };
-    let text_justification = JustifyText::Center;
-
     if let Some(reader) = channel {
         if let Ok(rx) = reader.receiver.lock() {
             while let Ok(item) = rx.try_recv() {
@@ -112,47 +111,41 @@ fn process_messages(
                         for (id, mut speed, mut target) in &mut query {
                             if id.0 == item.header.account_id {
                                 target.0 = Some(Vec2::new(message.x,message.y));
-                                speed.0 = message.speed;
+                                speed.fixed = Some(message.speed);
                             }
                         }
                     },
                     Value::Initial(message) => {
                         for character in message.entities {
-                            commands.spawn((
-                                Player::new(
-                                    character.account_id,
-                                    character.name.clone(),
-                                    &asset_server,
-                                    &mut texture_atlas_layouts
-                                )
-                                .with_position(character.x, character.y, 2.0), 
-                                OnGame,
-                                SpeedValue(0.0)
-                            )).with_child((
-                                Text2d::new(character.name.clone()),
-                                text_font.clone(),
-                                Transform::from_translation(Vec3::new(0.0, 260.0, 1.0)),
-                                TextLayout::new_with_justify(text_justification),
-                            ));
-                        }
-                    },
-                    Value::Connect(message) => {
-                        commands.spawn((
-                            Player::new(
-                                item.header.account_id,
-                                message.entity.name.clone(),
+                            Player::new::<EntityType>(
+                                character.account_id,
                                 &asset_server,
                                 &mut texture_atlas_layouts
                             )
-                            .with_position(message.entity.x, message.entity.y, 2.0), 
-                            OnGame,
-                            SpeedValue(0.0)
-                        )).with_child((
-                            Text2d::new(message.entity.name.clone()),
-                            text_font.clone(),
-                            Transform::from_translation(Vec3::new(0.0, 260.0, 1.0)),
-                            TextLayout::new_with_justify(text_justification),
-                        ));
+                            .with_name(character.name.clone())
+                            .with_position(character.x, character.y, 2.0)
+                            .with_speed(0.0)
+                            .build(&mut commands);
+                        }
+                    },
+                    Value::Connect(message) => {
+                        Player::new::<EntityType>(
+                            item.header.account_id,
+                            &asset_server,
+                            &mut texture_atlas_layouts
+                        )
+                        .with_name(message.entity.name.clone())
+                        .with_position(message.entity.x, message.entity.y, 2.0)
+                        .with_speed(0.0)
+                        .build(&mut commands);
+                    },
+                    Value::Disconnect(_) => {
+                        for (entity, id) in &delete_query {
+                            if id.0 == item.header.account_id {
+                                commands.entity(entity).despawn_recursive();
+                                break;
+                            }
+                        }
                     },
                     _ => ()
                 }
@@ -170,6 +163,8 @@ async fn socket_connection_task(
         let (mut stream, _) = connect_async(&url)
             .await
             .expect("Failed to connect");
+
+        RUNNING.store(true, Ordering::Relaxed);
 
         loop {
             // create timeout and stream futures
@@ -195,6 +190,7 @@ async fn socket_connection_task(
             if SHUTDOWN.load(Ordering::Relaxed) {
                 println!("SHUTTING DOWN");
                 stream.close(None).await.unwrap();
+                SHUTDOWN_BARRIER.wait();
                 break;
             }
 
@@ -208,12 +204,6 @@ fn game_setup(
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    let text_font = TextFont {
-        font_size: 50.0,
-        ..default()
-    };
-    let text_justification = JustifyText::Center;
-
     // Load the map: ensure any tile / tileset paths are relative to assets/ folder
     let map_handle: Handle<TiledMap> = asset_server.load("maps/tinker.tmx");
 
@@ -227,18 +217,14 @@ fn game_setup(
         OnGame
     ));
 
-    commands.spawn((Player::new(
+    Player::new::<PlayerType>(
         state.id,
-        state.username.clone(),
         &asset_server,
         &mut texture_atlas_layouts
-    ), OnGame)
-    ).with_child((
-        Text2d::new(state.username.clone()),
-        text_font.clone(),
-        Transform::from_translation(Vec3::new(0.0, 260.0, 1.0)),
-        TextLayout::new_with_justify(text_justification),
-    ));
+    )
+    .with_name(state.username.clone())
+    .build(&mut commands);
+
     commands.spawn((Cursor::new(
         &asset_server,
         &mut texture_atlas_layouts
@@ -285,7 +271,7 @@ fn player_animation(
         &mut Sprite,
         &mut Target,
         &mut Direction
-    ),With<PlayerType>>,
+    ),Or<(With<PlayerType>,With<EntityType>)>>,
 ) {
     for (mut graphic, mut sprite, target, direction) in &mut query {
         graphic.timer.tick(time.delta());
@@ -357,65 +343,31 @@ fn camera_movement(
 }
 
 fn player_movement(
-    time: Res<Time>, 
     mut query: Query<(
-        &AccountId,
-        &mut Transform,
         &mut Speed,
-        &mut Target,
-        &mut Direction
+        &mut Target
     ),With<PlayerType>>,
     keys: Res<ButtonInput<KeyCode>>, 
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform)>,
-    state: Res<ConnectionState>,
+    camera: Query<(&Camera, &GlobalTransform)>
 ) {
     let (camera, camera_transform) = camera.single();
+    let (mut speed, mut target) = query.single_mut();
 
-    for (id, mut transform, speed, mut target, mut facing) in &mut query {
-
-        if id.0 != state.id {
-            continue;
-        }
-
-        let mut move_speed = speed.walking as f32;
-        
-        if buttons.pressed(MouseButton::Left) {
-            (*target).0 = windows
-                .single()
-                .cursor_position()
-                .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor).ok())
-                .map(|ray| ray.origin.truncate())
-                .map(|v| Vec2::new(v.x, v.y + 180.0));
-        }
-
-        if keys.pressed(KeyCode::ShiftLeft) {
-            move_speed = speed.running as f32;
-        }
-
-        if let Some(point) = target.0 {
-            let cpos = transform.translation;
-            let tpos = Vec3::new(point.x, point.y, cpos.z);
-            let direction = (tpos - cpos).normalize();
-            let distance = cpos.distance(tpos);
-
-            if distance > 10. {
-                let amount = 1000. * time.delta_secs() * (move_speed / 10.0);
-                let npos = cpos + direction * amount;
-                transform.translation = npos;
-
-                if let Some(token) = state.token.clone() {
-                    broadcast(Message::Move(state.id, move_speed, npos.x, npos.y));
-                }
-
-            } else {
-                (*target).0 = None;
-            }
-
-            // update the facing direction of the player
-            *facing = Direction::from(&direction);
-        }
+    if keys.pressed(KeyCode::ShiftLeft) {
+        speed.fixed = Some(speed.running as f32);
+    } else {
+        speed.fixed = Some(speed.walking as f32);
+    }
+    
+    if buttons.pressed(MouseButton::Left) {
+        (*target).0 = windows
+            .single()
+            .cursor_position()
+            .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor).ok())
+            .map(|ray| ray.origin.truncate())
+            .map(|v| Vec2::new(v.x, v.y + 180.0));
     }
 }
 
@@ -424,34 +376,35 @@ fn character_movement(
     mut query: Query<(
         &AccountId,
         &mut Transform,
-        &mut SpeedValue,
+        &mut Speed,
         &mut Target,
         &mut Direction
-    ),With<PlayerType>>,
+    )>,
     state: Res<ConnectionState>,
 ) {
     for (id, mut transform, speed, mut target, mut facing) in &mut query {
 
-        if id.0 == state.id {
-            continue;
-        }
-
         if let Some(point) = target.0 {
-            let cpos = transform.translation;
-            let tpos = Vec3::new(point.x, point.y, cpos.z);
-            let direction = (tpos - cpos).normalize();
-            let distance = cpos.distance(tpos);
-
-            if distance > 10. {
-                let amount = 1000. * time.delta_secs() * (speed.0 / 10.0);
-                let npos = cpos + direction * amount;
-                transform.translation = npos;
-            } else {
-                (*target).0 = None;
+            if let Some(speed_value) = speed.fixed {
+                let cpos = transform.translation;
+                let tpos = Vec3::new(point.x, point.y, cpos.z);
+                let direction = (tpos - cpos).normalize();
+                let distance = cpos.distance(tpos);
+    
+                if distance > 10. {
+                    let amount = 1000. * time.delta_secs() * (speed_value / 10.0);
+                    let npos = cpos + direction * amount;
+                    transform.translation = npos;
+                    if id.0 == state.id {
+                        broadcast(Message::Move(state.id, speed_value, npos.x, npos.y));
+                    }
+                } else {
+                    (*target).0 = None;
+                }
+    
+                // update the facing direction of the character
+                *facing = Direction::from(&direction);
             }
-
-            // update the facing direction of the character
-            *facing = Direction::from(&direction);
         }
     }
 }
