@@ -11,22 +11,21 @@ use async_std::task::sleep;
 use futures_util::lock::Mutex;
 use futures_util::pin_mut;
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
+use tinker_records::messages::{Message, Value};
 use async_tungstenite::async_std::connect_async;
-use tungstenite::Message;
-use uuid::Uuid;
+use tungstenite as ts;
 use futures_util::stream::StreamExt;
 
 use crate::cursor::{Cursor, CursorData, CursorType};
-use crate::player::{Direction, Graphic, Player, PlayerType, Speed, Target};
+use crate::player::{AccountId, Direction, Graphic, Player, PlayerType, Speed, SpeedValue, Target};
 use crate::state::ConnectionState;
 use bevy::tasks::IoTaskPool;
 
 use super::{despawn_view, ViewState};
 
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
-pub static INCOMING_QUEUE: Lazy<Mutex<VecDeque<MessageValue>>> = Lazy::new(|| { Default::default() });
-pub static OUTGOING_QUEUE: Lazy<Mutex<VecDeque<MessageValue>>> = Lazy::new(|| { Default::default() });
+pub static INCOMING_QUEUE: Lazy<Mutex<VecDeque<Message>>> = Lazy::new(|| { Default::default() });
+pub static OUTGOING_QUEUE: Lazy<Mutex<VecDeque<Message>>> = Lazy::new(|| { Default::default() });
 
 #[derive(Component)]
 struct OnGame;
@@ -34,10 +33,13 @@ struct OnGame;
 pub fn main_game(app: &mut App) {
     app
         .add_systems(OnEnter(ViewState::Game), socket_connection)
-        .add_systems(Update, handle_messages.run_if(in_state(ViewState::Game)))
+        .add_systems(OnEnter(ViewState::Game), handle_messages)
+        .add_systems(Update, process_messages)
 
         .add_systems(OnEnter(ViewState::Game), game_setup)
         .add_systems(OnExit(ViewState::Game), despawn_view::<OnGame>)
+
+        .add_systems(Update, character_movement.run_if(in_state(ViewState::Game)))
 
         .add_systems(Update, player_movement.run_if(in_state(ViewState::Game)))
         .add_systems(Update, camera_movement.run_if(in_state(ViewState::Game)))
@@ -47,57 +49,7 @@ pub fn main_game(app: &mut App) {
         .add_systems(Update, camera_zoom.run_if(in_state(ViewState::Game)));
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct Character {
-    pub id: i32,
-    pub name: String,
-    pub created: DateTime<Utc>,
-    pub account_id: i32,
-    pub x: f32,
-    pub y: f32,
-    pub modified: DateTime<Utc>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub enum MessageValue {
-    Move(MoveMessage),
-    Attack(AttackMessage),
-    Initial(InitialMessage),
-    Connect(ConnectMessage),
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct InitialMessage {
-    pub token: String,
-    pub id: Uuid,
-    pub entities: Vec<Character>
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct ConnectMessage {
-    pub token: String,
-    pub id: Uuid,
-    pub entity: Character
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct MoveMessage {
-    pub token: String,
-    pub id: Uuid,
-    pub x: f32,
-    pub y: f32,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct AttackMessage {
-    pub token: String,
-    pub id: Uuid,
-    pub target: i32,
-    pub ability: i32,
-}
-
-
-fn broadcast(message: MessageValue) {
+fn broadcast(message: Message) {
     // TODO: change this to use an mpsc channel to enqueue outgoing messages
     // TODO: change the socket_connection_task to use mpsc channel to send incoming messages
     if let Some(mut queue) = OUTGOING_QUEUE.try_lock() {
@@ -105,10 +57,18 @@ fn broadcast(message: MessageValue) {
     }
 }
 
+
+#[derive(Resource)]
+struct ConnectionChannel {
+    receiver: std::sync::Mutex<std::sync::mpsc::Receiver<Message>>,
+}
+
 fn handle_messages(
-    state: Res<ConnectionState>,
+    mut commands: Commands,
 ) {
-    IoTaskPool::get().spawn(handle_messages_task(state.clone())).detach();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    IoTaskPool::get().spawn(handle_messages_task(sender)).detach();
+    commands.insert_resource(ConnectionChannel { receiver: std::sync::Mutex::new(receiver) });
 }
 
 fn socket_connection(
@@ -118,18 +78,86 @@ fn socket_connection(
 }
 
 async fn handle_messages_task(
-    state: ConnectionState
+    sender: std::sync::mpsc::Sender<Message>
 ) {
-    for message in INCOMING_QUEUE.lock().await.drain(..) {
+    loop {
+        for item in INCOMING_QUEUE.lock().await.drain(..) {
+            sender.send(item).unwrap();
+        }
+    }
+}
 
-        // 1. get connect/initial messages
-        // 2. for entities in each message, spawn a player
-        // 3. get disconnect messages
-        // 4. for entities in each message, despawn a player
-        // 5. get move messages
-        // 6. for each message, update the position of a player
+fn process_messages(
+    mut query: Query<(
+        &AccountId,
+        &mut SpeedValue,
+        &mut Target,
+    ),With<PlayerType>>,
+    channel: Option<Res<ConnectionChannel>>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let text_font = TextFont {
+        font_size: 50.0,
+        ..default()
+    };
+    let text_justification = JustifyText::Center;
 
-        dbg!(message);
+    if let Some(reader) = channel {
+        if let Ok(rx) = reader.receiver.lock() {
+            while let Ok(item) = rx.try_recv() {
+                match item.value {
+                    Value::Move(message) => {
+                        for (id, mut speed, mut target) in &mut query {
+                            if id.0 == item.header.account_id {
+                                target.0 = Some(Vec2::new(message.x,message.y));
+                                speed.0 = message.speed;
+                            }
+                        }
+                    },
+                    Value::Initial(message) => {
+                        for character in message.entities {
+                            commands.spawn((
+                                Player::new(
+                                    character.account_id,
+                                    character.name.clone(),
+                                    &asset_server,
+                                    &mut texture_atlas_layouts
+                                )
+                                .with_position(character.x, character.y, 2.0), 
+                                OnGame,
+                                SpeedValue(0.0)
+                            )).with_child((
+                                Text2d::new(character.name.clone()),
+                                text_font.clone(),
+                                Transform::from_translation(Vec3::new(0.0, 260.0, 1.0)),
+                                TextLayout::new_with_justify(text_justification),
+                            ));
+                        }
+                    },
+                    Value::Connect(message) => {
+                        commands.spawn((
+                            Player::new(
+                                item.header.account_id,
+                                message.entity.name.clone(),
+                                &asset_server,
+                                &mut texture_atlas_layouts
+                            )
+                            .with_position(message.entity.x, message.entity.y, 2.0), 
+                            OnGame,
+                            SpeedValue(0.0)
+                        )).with_child((
+                            Text2d::new(message.entity.name.clone()),
+                            text_font.clone(),
+                            Transform::from_translation(Vec3::new(0.0, 260.0, 1.0)),
+                            TextLayout::new_with_justify(text_justification),
+                        ));
+                    },
+                    _ => ()
+                }
+            }
+        }
     }
 }
 
@@ -152,7 +180,7 @@ async fn socket_connection_task(
 
             // check for incoming messages from the server
             if let Either::Left((result, _)) = select(source,timeout).await {
-                if let Some(Ok(Message::Text(value))) = result {
+                if let Some(Ok(ts::Message::Text(value))) = result {
                     let message = serde_json::from_slice(value.as_bytes()).unwrap();
                     INCOMING_QUEUE.lock().await.push_back(message);
                 }
@@ -161,7 +189,7 @@ async fn socket_connection_task(
             // send outgoing messages to the server
             while let Some(value) = OUTGOING_QUEUE.lock().await.pop_front() {
                 let message = serde_json::to_string(&value).unwrap();
-                stream.send(Message::text(message)).await.unwrap();
+                stream.send(ts::Message::text(message)).await.unwrap();
             }
 
             if SHUTDOWN.load(Ordering::Relaxed) {
@@ -200,6 +228,7 @@ fn game_setup(
     ));
 
     commands.spawn((Player::new(
+        state.id,
         state.username.clone(),
         &asset_server,
         &mut texture_atlas_layouts
@@ -330,6 +359,7 @@ fn camera_movement(
 fn player_movement(
     time: Res<Time>, 
     mut query: Query<(
+        &AccountId,
         &mut Transform,
         &mut Speed,
         &mut Target,
@@ -343,8 +373,13 @@ fn player_movement(
 ) {
     let (camera, camera_transform) = camera.single();
 
-    for (mut transform, speed, mut target, mut facing) in &mut query {
-        let mut movement = (speed.walking as f32) / 10.0;
+    for (id, mut transform, speed, mut target, mut facing) in &mut query {
+
+        if id.0 != state.id {
+            continue;
+        }
+
+        let mut move_speed = speed.walking as f32;
         
         if buttons.pressed(MouseButton::Left) {
             (*target).0 = windows
@@ -356,7 +391,7 @@ fn player_movement(
         }
 
         if keys.pressed(KeyCode::ShiftLeft) {
-            movement = (speed.running as f32) / 10.0;
+            move_speed = speed.running as f32;
         }
 
         if let Some(point) = target.0 {
@@ -366,17 +401,12 @@ fn player_movement(
             let distance = cpos.distance(tpos);
 
             if distance > 10. {
-                let amount = 1000. * time.delta_secs() * movement;
+                let amount = 1000. * time.delta_secs() * (move_speed / 10.0);
                 let npos = cpos + direction * amount;
                 transform.translation = npos;
 
                 if let Some(token) = state.token.clone() {
-                    broadcast(MessageValue::Move(MoveMessage {
-                        token,
-                        id: Uuid::now_v7(),
-                        x: npos.x,
-                        y: npos.y,
-                    }));
+                    broadcast(Message::Move(state.id, move_speed, npos.x, npos.y));
                 }
 
             } else {
@@ -384,6 +414,43 @@ fn player_movement(
             }
 
             // update the facing direction of the player
+            *facing = Direction::from(&direction);
+        }
+    }
+}
+
+fn character_movement(
+    time: Res<Time>, 
+    mut query: Query<(
+        &AccountId,
+        &mut Transform,
+        &mut SpeedValue,
+        &mut Target,
+        &mut Direction
+    ),With<PlayerType>>,
+    state: Res<ConnectionState>,
+) {
+    for (id, mut transform, speed, mut target, mut facing) in &mut query {
+
+        if id.0 == state.id {
+            continue;
+        }
+
+        if let Some(point) = target.0 {
+            let cpos = transform.translation;
+            let tpos = Vec3::new(point.x, point.y, cpos.z);
+            let direction = (tpos - cpos).normalize();
+            let distance = cpos.distance(tpos);
+
+            if distance > 10. {
+                let amount = 1000. * time.delta_secs() * (speed.0 / 10.0);
+                let npos = cpos + direction * amount;
+                transform.translation = npos;
+            } else {
+                (*target).0 = None;
+            }
+
+            // update the facing direction of the character
             *facing = Direction::from(&direction);
         }
     }

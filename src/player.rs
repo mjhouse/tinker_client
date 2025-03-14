@@ -37,6 +37,7 @@ impl Direction {
 
 #[derive(Bundle)]
 pub struct Player {
+    id: AccountId,
     kind: PlayerType,
     name: Name,
     experience: Experience,
@@ -52,6 +53,7 @@ pub struct Player {
 impl Player {
 
     pub fn new(
+        id: i32,
         name: String,
         assets: &Res<AssetServer>,
         atlas: &mut ResMut<Assets<TextureAtlasLayout>>
@@ -63,6 +65,7 @@ impl Player {
         let handle = atlas.add(layout);
 
         Self {
+            id: AccountId(id),
             kind: Default::default(),
             name: Name(name),
             experience: Experience { 
@@ -113,7 +116,15 @@ impl Player {
         }
     }
 
+    pub fn with_position(mut self, x: f32, y: f32, z: f32) -> Self {
+        self.transform = Transform::from_xyz(x, y, z);
+        self
+    }
+
 }
+
+#[derive(Component, Debug)]
+pub struct AccountId(pub i32);
 
 #[derive(Component, Debug)]
 pub struct Name(String);
@@ -129,6 +140,9 @@ pub struct Speed {
     pub walking: usize,
     pub running: usize,
 }
+
+#[derive(Component, Debug)]
+pub struct SpeedValue(pub f32);
 
 #[derive(Component, Debug)]
 pub struct Health {
