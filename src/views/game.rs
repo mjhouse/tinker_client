@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Barrier;
 use std::time::Duration;
-use chrono::{DateTime, Utc};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseMotion};
 use bevy::window::PrimaryWindow;
 use bevy_ecs_tiled::prelude::*;
@@ -18,7 +17,7 @@ use tungstenite as ts;
 use futures_util::stream::StreamExt;
 
 use crate::cursor::{Cursor, CursorData, CursorType};
-use crate::player::{AccountId, Direction, EntityType, Graphic, Player, PlayerType, Speed, Target};
+use crate::player::{AccountId, CharacterType, Direction, EntityType, Graphic, Player, PlayerType, Speed, Target};
 use crate::state::ConnectionState;
 use bevy::tasks::IoTaskPool;
 
@@ -96,8 +95,8 @@ fn process_messages(
         &AccountId,
         &mut Speed,
         &mut Target,
-    ),With<EntityType>>,
-    delete_query: Query<(Entity,&AccountId), With<EntityType>>,
+    ),With<CharacterType>>,
+    delete_query: Query<(Entity,&AccountId), With<CharacterType>>,
     channel: Option<Res<ConnectionChannel>>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -110,31 +109,32 @@ fn process_messages(
                     Value::Move(message) => {
                         for (id, mut speed, mut target) in &mut query {
                             if id.0 == item.header.account_id {
-                                target.0 = Some(Vec2::new(message.x,message.y));
+                                target.0 = Some(message.target);
                                 speed.fixed = Some(message.speed);
+                                break;
                             }
                         }
                     },
                     Value::Initial(message) => {
                         for character in message.entities {
-                            Player::new::<EntityType>(
-                                character.account_id,
+                            Player::new::<CharacterType>(
+                                character.id,
                                 &asset_server,
                                 &mut texture_atlas_layouts
                             )
-                            .with_name(character.name.clone())
+                            .with_name(character.username.clone())
                             .with_position(character.x, character.y, 2.0)
                             .with_speed(0.0)
                             .build(&mut commands);
                         }
                     },
                     Value::Connect(message) => {
-                        Player::new::<EntityType>(
+                        Player::new::<CharacterType>(
                             item.header.account_id,
                             &asset_server,
                             &mut texture_atlas_layouts
                         )
-                        .with_name(message.entity.name.clone())
+                        .with_name(message.entity.username.clone())
                         .with_position(message.entity.x, message.entity.y, 2.0)
                         .with_speed(0.0)
                         .build(&mut commands);
@@ -271,7 +271,7 @@ fn player_animation(
         &mut Sprite,
         &mut Target,
         &mut Direction
-    ),Or<(With<PlayerType>,With<EntityType>)>>,
+    ),With<EntityType>>,
 ) {
     for (mut graphic, mut sprite, target, direction) in &mut query {
         graphic.timer.tick(time.delta());
@@ -366,8 +366,8 @@ fn player_movement(
             .single()
             .cursor_position()
             .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor).ok())
-            .map(|ray| ray.origin.truncate())
-            .map(|v| Vec2::new(v.x, v.y + 180.0));
+            .map(|ray| ray.origin)
+            .map(|v| Vec3::new(v.x, v.y + 180.0, v.z));
     }
 }
 
@@ -379,7 +379,7 @@ fn character_movement(
         &mut Speed,
         &mut Target,
         &mut Direction
-    )>,
+    ),With<EntityType>>,
     state: Res<ConnectionState>,
 ) {
     for (id, mut transform, speed, mut target, mut facing) in &mut query {
@@ -390,13 +390,18 @@ fn character_movement(
                 let tpos = Vec3::new(point.x, point.y, cpos.z);
                 let direction = (tpos - cpos).normalize();
                 let distance = cpos.distance(tpos);
-    
+     
                 if distance > 10. {
                     let amount = 1000. * time.delta_secs() * (speed_value / 10.0);
                     let npos = cpos + direction * amount;
                     transform.translation = npos;
                     if id.0 == state.id {
-                        broadcast(Message::Move(state.id, speed_value, npos.x, npos.y));
+                        broadcast(Message::Move(
+                            state.id, 
+                            speed_value, 
+                            tpos,
+                            cpos
+                        ));
                     }
                 } else {
                     (*target).0 = None;

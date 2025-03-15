@@ -2,11 +2,17 @@ use bevy::prelude::*;
 use std::time::Duration;
 use crate::views::game::OnGame;
 
+// marker for all entities (current player or others)
+#[derive(Component, Default)]
+pub struct EntityType;
+
+// a marker only present on the current player
 #[derive(Component, Default)]
 pub struct PlayerType;
 
+// a marker only present on other players
 #[derive(Component, Default)]
-pub struct EntityType;
+pub struct CharacterType;
 
 #[derive(Component, Clone, Copy)]
 pub enum Direction {
@@ -44,7 +50,10 @@ pub struct Player<T = PlayerType>
 where T: Sync + Send + Component + Default
 {
     id: AccountId,
-    kind: T,
+    
+    general_kind: EntityType,
+    specific_kind: T,
+
     name: Name,
     experience: Experience,
     health: Health,
@@ -74,7 +83,10 @@ impl Player
 
         Player {
             id: AccountId(id),
-            kind: Default::default(),
+
+            general_kind: EntityType::default(),
+            specific_kind: Default::default(),
+
             name: Name(String::new()),
             experience: Experience { 
                 current: 0, 
@@ -188,8 +200,8 @@ pub struct Health {
     pub maximum: usize,
 }
 
-#[derive(Component, Debug)]
-pub struct Target(pub Option<Vec2>);
+#[derive(Component)]
+pub struct Target(pub Option<Vec3>);
 
 #[derive(Component, Debug)]
 pub struct Graphic {

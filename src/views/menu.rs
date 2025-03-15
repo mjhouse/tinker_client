@@ -623,6 +623,7 @@ fn menu_action(
                         menu_state.set(MenuState::Login);
                     } else {
                         // display failure in UI
+                        dbg!(info);
                         error_message.0 = "Registration failed".into();
                     }
 

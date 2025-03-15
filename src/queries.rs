@@ -18,8 +18,7 @@ pub struct LoginForm {
 #[derive(Serialize,Deserialize,Debug)]
 pub struct AccountInfo {
     pub id: i32,
-    pub name: String,
-    pub character_id: Option<i32>
+    pub username: String,
 }
 
 #[derive(Serialize,Deserialize,Debug)]

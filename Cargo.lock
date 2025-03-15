@@ -4992,11 +4992,12 @@ dependencies = [
 [[package]]
 name = "tinker_records"
 version = "0.1.0"
-source = "git+https://github.com/mjhouse/tinker_records.git#866f94a65a0a885257280c97be6d918de68eb37d"
+source = "git+https://github.com/mjhouse/tinker_records.git#b7c046fba53a92fae11408464c055856905c4bf0"
 dependencies = [
  "chrono",
  "diesel",
  "diesel_migrations",
+ "glam",
  "serde",
  "serde_json",
  "uuid",
